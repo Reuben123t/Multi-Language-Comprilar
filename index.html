@@ -249,6 +249,20 @@
         .bp-view.active { display:block; }
         #terminal-container { height:100%; width:100%; background:#000; padding:4px; }
         
+        /* Animated run progress bar */
+        .run-progress-bar { height:3px; width:100%; background:transparent; position:relative; overflow:hidden; flex-shrink:0; opacity:0; transition:opacity 0.2s; }
+        .run-progress-bar.active { opacity:1; }
+        .run-progress-bar::after { content:''; position:absolute; height:100%; width:40%; background:var(--accent-gradient); border-radius:99px; animation:runSweep 1.2s cubic-bezier(0.4,0,0.6,1) infinite; }
+        @keyframes runSweep { 0%{left:-45%} 100%{left:105%} }
+
+        /* AI suggestion pill */
+        #ai-suggest-bar { display:none; position:absolute; bottom:0; left:0; right:0; height:24px; background:rgba(56,189,248,0.06); border-top:1px solid rgba(56,189,248,0.15); align-items:center; padding:0 14px; gap:8px; font-family:var(--font-code); font-size:11px; color:var(--accent); z-index:50; }
+        #ai-suggest-bar.show { display:flex; }
+        #ai-suggest-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:0.75; }
+        #ai-suggest-bar kbd { background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.25); border-radius:3px; padding:1px 5px; font-family:var(--font-code); font-size:9px; color:var(--accent); }
+        .ai-thinking-dot { width:5px; height:5px; border-radius:50%; background:var(--accent); animation:aiPulse 1s ease-in-out infinite; flex-shrink:0; }
+        @keyframes aiPulse { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.2)} }
+
         .output-line { font-family:var(--font-code); font-size:12px; line-height:1.7; color:var(--text-muted); white-space:pre-wrap; word-break:break-all; }
         .output-line.out-info { color:var(--text-dim); }
         .output-line.out-ok { color:var(--ok); }
@@ -465,7 +479,14 @@
             <span class="breadcrumb-sep">/</span>
             <span class="breadcrumb-item current" id="bc-file">—</span>
         </div>
-        <div id="monaco-host" style="display:none;flex:1;min-height:0;"></div>
+        <div id="monaco-host" style="display:none;flex:1;min-height:0;position:relative;"></div>
+        <div id="ai-suggest-bar">
+            <div class="ai-thinking-dot" id="ai-dot" style="display:none;"></div>
+            <span style="color:var(--text-dim);font-size:10px;letter-spacing:0.5px;flex-shrink:0;">AI</span>
+            <span id="ai-suggest-text">—</span>
+            <kbd>Tab</kbd><span style="color:var(--text-dim);font-size:10px;">to accept</span>
+            <span style="color:var(--text-dim);font-size:10px;cursor:pointer;margin-left:6px;" onclick="window.AISuggest.dismiss()">✕</span>
+        </div>
     </main>
 
     <!-- INSPECTOR -->
@@ -497,12 +518,13 @@
 
     <!-- BOTTOM PANEL -->
     <section class="bottom-panel">
+        <div class="run-progress-bar" id="run-progress-bar"></div>
         <header class="bp-head">
             <div class="bp-tabs">
                 <div class="bp-tab" data-target="bp-problems" onclick="window.UI.switchBottomTab('bp-problems')">Problems <span class="bp-badge" id="problem-badge" style="display:none">0</span></div>
                 <div class="bp-tab" data-target="bp-output" onclick="window.UI.switchBottomTab('bp-output')">Output</div>
                 <div class="bp-tab active" data-target="bp-terminal" onclick="window.UI.switchBottomTab('bp-terminal')">Terminal</div>
-                <div class="bp-tab" data-target="bp-preview" onclick="window.UI.switchBottomTab('bp-preview');window.CMD.trigger('ui.refreshPreview')">Preview</div>
+                <div class="bp-tab" data-target="bp-preview" onclick="window.CMD.trigger('ui.openPreview')" title="Open HTML preview in a new tab">Preview ↗</div>
             </div>
             <div class="bp-actions">
                 <button class="btn success" id="btn-run" onclick="window.CMD.trigger('code.run')">▶ Run</button>
@@ -524,8 +546,12 @@
             <div class="bp-view active" id="bp-terminal" style="padding:0;">
                 <div id="terminal-container"></div>
             </div>
-            <div class="bp-view" id="bp-preview" style="padding:0;">
-                <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin"></iframe>
+            <div class="bp-view" id="bp-preview" style="padding:0;display:flex;align-items:center;justify-content:center;">
+                <div class="empty-msg" style="pointer-events:auto;">
+                    <span class="em-icon">🌐</span>
+                    Click <strong style="color:var(--accent)">Preview ↗</strong> to open the HTML preview in a new tab.<br>
+                    <button class="btn primary" style="margin-top:14px;" onclick="window.CMD.trigger('ui.openPreview')">Open Preview ↗</button>
+                </div>
             </div>
         </div>
     </section>
@@ -1048,10 +1074,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof monaco !== 'undefined') monaco.editor.setModelLanguage(window.editor.getModel(), window.App.getLang(name).id);
             }
             this.render(); window.VFS.renderTree();
-            // Auto-show preview for HTML files
-            if (name.endsWith('.html') && file) {
-                document.getElementById('html-preview-frame').srcdoc = file.content;
-            }
         },
 
         close(name, e) {
@@ -1212,7 +1234,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 { icon:'📂', name:'Toggle Sidebar', desc:'Show/hide sidebar', kbd:'Ctrl+B', action:()=>window.CMD.trigger('ui.toggleSidebar') },
                 { icon:'🗃️', name:'Toggle Inspector', desc:'Show/hide right panel', action:()=>window.CMD.trigger('ui.toggleInspector') },
                 { icon:'🔢', name:'Toggle Terminal', desc:'Show/hide bottom panel', kbd:'Ctrl+`', action:()=>window.CMD.trigger('ui.toggleBottom') },
-                { icon:'🌐', name:'HTML Preview', desc:'Live preview for HTML files', action:()=>{ window.UI.switchBottomTab('bp-preview'); window.CMD.trigger('ui.refreshPreview'); window.Palette.close(); } },
+                { icon:'🌐', name:'HTML Preview', desc:'Open HTML preview in a new tab', action:()=>{ window.CMD.trigger('ui.openPreview'); window.Palette.close(); } },
                 { icon:'🎨', name:'Theme: Nebula Dark', action:()=>{ document.getElementById('set-theme').value=''; window.Settings.apply(); window.Palette.close(); } },
                 { icon:'🎨', name:'Theme: Dracula', action:()=>{ document.getElementById('set-theme').value='dracula'; window.Settings.apply(); window.Palette.close(); } },
                 { icon:'🎨', name:'Theme: Monokai', action:()=>{ document.getElementById('set-theme').value='monokai'; window.Settings.apply(); window.Palette.close(); } },
@@ -1380,6 +1402,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     window.State.running = true;
                     document.getElementById('btn-run').style.display = 'none';
                     document.getElementById('btn-stop').style.display = 'flex';
+                    document.getElementById('run-progress-bar').classList.add('active');
                     window.UI.switchBottomTab('bp-terminal');
                     const ext = file.name.split('.').pop().toLowerCase();
                     if (window.term) window.term.writeln(`\r\n\x1b[1;32m$ Running: ${file.name}\x1b[0m\r\n`);
@@ -1417,12 +1440,11 @@ document.addEventListener("DOMContentLoaded", () => {
                         }, 300);
 
                     } else if (ext === 'html') {
-                        // HTML preview
+                        // HTML preview — open in new tab
                         setTimeout(() => {
-                            document.getElementById('html-preview-frame').srcdoc = file.content;
-                            window.UI.switchBottomTab('bp-preview');
-                            if (window.term) { window.term.writeln('\x1b[36mHTML rendered in Preview tab.\x1b[0m'); window.MockCLI.prompt(); }
-                            window.UI.addOutputLine('[Run] HTML rendered in Preview tab.', 'out-ok');
+                            window.CMD.trigger('ui.openPreview');
+                            if (window.term) { window.term.writeln('\x1b[36mHTML preview opened in new tab.\x1b[0m'); window.MockCLI.prompt(); }
+                            window.UI.addOutputLine('[Run] HTML preview opened in new tab.', 'out-ok');
                             window.CMD.trigger('code.stop_silent');
                         }, 200);
 
@@ -1470,6 +1492,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         window.State.running = false;
                         document.getElementById('btn-run').style.display = 'flex';
                         document.getElementById('btn-stop').style.display = 'none';
+                        document.getElementById('run-progress-bar').classList.remove('active');
                         if (window.term) { window.term.writeln(`\r\n\x1b[31m[Process killed by user]\x1b[0m`); window.MockCLI.prompt(); }
                         window.Toast.warn('Stopped.');
                     }
@@ -1478,6 +1501,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     window.State.running = false;
                     document.getElementById('btn-run').style.display = 'flex';
                     document.getElementById('btn-stop').style.display = 'none';
+                    document.getElementById('run-progress-bar').classList.remove('active');
                     break;
                 case 'bp.clear':
                     document.getElementById('output-content').innerHTML = '<div class="output-line out-info">[Output cleared]</div>';
@@ -1504,10 +1528,19 @@ document.addEventListener("DOMContentLoaded", () => {
                     setTimeout(() => window.editor?.layout(), 100);
                     break;
                 }
-                case 'ui.refreshPreview': {
+                case 'ui.refreshPreview':
+                case 'ui.openPreview': {
                     const file = window.State.files.find(f => f.name === window.State.activeFile);
-                    if (file && file.name.endsWith('.html')) {
-                        document.getElementById('html-preview-frame').srcdoc = file.content;
+                    const html = file?.name.endsWith('.html') ? file.content : (window.editor ? window.editor.getValue() : '');
+                    if (html) {
+                        const blob = new Blob([html], { type: 'text/html' });
+                        const url = URL.createObjectURL(blob);
+                        const win = window.open(url, '_blank');
+                        // Revoke blob URL after the tab has had time to load it
+                        setTimeout(() => URL.revokeObjectURL(url), 5000);
+                        if (!win) window.Toast.warn('Preview blocked — allow pop-ups for this site.');
+                    } else {
+                        window.Toast.warn('No HTML file open to preview.');
                     }
                     break;
                 }
@@ -1655,9 +1688,131 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 1000);
 
     // ═══════════════════════════════════
+    // AI AUTOCOMPLETE
+    // ═══════════════════════════════════
+    window.AISuggest = {
+        debounceTimer: null,
+        currentSuggestion: '',
+        decorationIds: [],
+
+        show(text) {
+            this.currentSuggestion = text;
+            const bar = document.getElementById('ai-suggest-bar');
+            document.getElementById('ai-suggest-text').textContent = text;
+            document.getElementById('ai-dot').style.display = 'none';
+            bar.classList.add('show');
+        },
+
+        thinking() {
+            const bar = document.getElementById('ai-suggest-bar');
+            document.getElementById('ai-suggest-text').textContent = 'thinking…';
+            document.getElementById('ai-dot').style.display = 'block';
+            bar.classList.add('show');
+        },
+
+        dismiss() {
+            this.currentSuggestion = '';
+            document.getElementById('ai-suggest-bar').classList.remove('show');
+            document.getElementById('ai-dot').style.display = 'none';
+            // Clear ghost text decoration
+            if (window.editor && this.decorationIds.length) {
+                this.decorationIds = window.editor.deltaDecorations(this.decorationIds, []);
+            }
+        },
+
+        accept() {
+            if (!this.currentSuggestion || !window.editor) return;
+            const pos = window.editor.getPosition();
+            window.editor.executeEdits('ai-suggest', [{
+                range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+                text: this.currentSuggestion
+            }]);
+            this.dismiss();
+        },
+
+        showGhost(text) {
+            if (!window.editor || !window.monaco) return;
+            const pos = window.editor.getPosition();
+            if (!pos) return;
+            // Clear old ghost
+            this.decorationIds = window.editor.deltaDecorations(this.decorationIds, []);
+            if (!text) return;
+            this.decorationIds = window.editor.deltaDecorations(this.decorationIds, [{
+                range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+                options: {
+                    after: {
+                        content: text,
+                        inlineClassName: 'ai-ghost-text'
+                    }
+                }
+            }]);
+        },
+
+        async fetchSuggestion(code, lang) {
+            const lines = code.split('\n');
+            const pos = window.editor?.getPosition();
+            if (!pos) return;
+            const linesSoFar = lines.slice(Math.max(0, pos.lineNumber - 20), pos.lineNumber);
+            const currentLine = linesSoFar[linesSoFar.length - 1] || '';
+            const prefix = currentLine.slice(0, pos.column - 1);
+            if (!prefix.trim() && !lines.slice(Math.max(0, pos.lineNumber - 5), pos.lineNumber - 1).some(l => l.trim())) {
+                this.dismiss(); return;
+            }
+
+            this.thinking();
+            try {
+                const context = linesSoFar.join('\n');
+                const resp = await fetch('https://api.anthropic.com/v1/messages', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'claude-sonnet-4-20250514',
+                        max_tokens: 120,
+                        system: `You are a code autocomplete engine for ${lang}. Complete the code at the cursor. Output ONLY the completion text (what comes right after the cursor). No explanations, no markdown, no code fences. Keep it short — complete the current expression, line, or at most 2-3 lines. Do not repeat what's already written.`,
+                        messages: [{ role: 'user', content: `Complete this ${lang} code at the cursor (|):\n\n${context}|` }]
+                    })
+                });
+                if (!resp.ok) { this.dismiss(); return; }
+                const data = await resp.json();
+                const suggestion = data.content?.[0]?.text?.trim() || '';
+                if (suggestion && suggestion.length > 0 && suggestion.length < 300) {
+                    this.show(suggestion);
+                    this.showGhost(suggestion);
+                } else {
+                    this.dismiss();
+                }
+            } catch(e) {
+                this.dismiss();
+            }
+        },
+
+        trigger(code, lang) {
+            clearTimeout(this.debounceTimer);
+            this.debounceTimer = setTimeout(() => {
+                this.fetchSuggestion(code, lang);
+            }, 650);
+        }
+    };
+
+    // Inject ghost text CSS
+    const ghostStyle = document.createElement('style');
+    ghostStyle.textContent = `.ai-ghost-text { color: rgba(148,163,184,0.45) !important; font-style: italic; }`;
+    document.head.appendChild(ghostStyle);
+
+    // ═══════════════════════════════════
     // KEYBOARD SHORTCUTS
     // ═══════════════════════════════════
     document.addEventListener('keydown', e => {
+        // Accept AI suggestion with Tab when suggestion bar is visible
+        if (e.key === 'Tab' && document.getElementById('ai-suggest-bar').classList.contains('show') && window.AISuggest.currentSuggestion) {
+            e.preventDefault();
+            window.AISuggest.accept();
+            return;
+        }
+        // Dismiss AI suggestion on Escape
+        if (e.key === 'Escape') {
+            window.AISuggest.dismiss();
+        }
         const ctrl = e.ctrlKey || e.metaKey;
         if (ctrl && e.key === 'p') { e.preventDefault(); window.Palette.open(); }
         else if (ctrl && e.key === 's') { e.preventDefault(); window.CMD.trigger('core.save'); }
@@ -1731,17 +1886,16 @@ document.addEventListener("DOMContentLoaded", () => {
                     const file = window.State.files.find(f => f.name === window.State.activeFile);
                     if (file) file.content = window.editor.getValue();
                     window.UI.updateStatus();
-                    // Live HTML preview
-                    if (window.State.activeFile?.endsWith('.html')) {
-                        const frame = document.getElementById('html-preview-frame');
-                        if (frame && document.getElementById('bp-preview').classList.contains('active')) {
-                            frame.srcdoc = window.editor.getValue();
-                        }
-                    }
+                    // AI autocomplete trigger
+                    const lang = window.App.getLang(window.State.activeFile).id;
+                    window.AISuggest.dismiss();
+                    window.AISuggest.trigger(window.editor.getValue(), lang);
                 });
 
                 window.editor.onDidChangeCursorPosition(e => {
                     document.getElementById('stat-pos').innerText = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+                    // Dismiss ghost text if cursor moved away
+                    if (window.AISuggest.currentSuggestion) window.AISuggest.dismiss();
                 });
 
                 window.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => window.CMD.trigger('core.save'));
